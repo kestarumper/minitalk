@@ -66,6 +66,16 @@ MapFdUsername * mapGetUserByFd(MapFdUsername maps[], int fd) {
     return NULL; // user not found
 }
 
+void strReplace(char * str, char what, char c) {
+    int len = strlen(str);
+    while(*str != '\0') {
+        if(*str == what) {
+            *str = c;
+        }
+        str++;
+    }
+}
+
 void mapListUsers(MapFdUsername maps[]) {
     printf("List:\tFD\tUSERNAME\n");
     for(int i = 0; i < MAX_USERS; i++) {
@@ -75,8 +85,15 @@ void mapListUsers(MapFdUsername maps[]) {
     }
 }
 
-int sendUserList(MapFdUsername maps[]) {
-
+void mapSendUserList(MapFdUsername maps[], int fd) {
+    send(fd, "\nList:\tUSERNAME\n", 16, 0);
+    for(int i = 0; i < MAX_USERS; i++) {
+        if(maps[i].username != NULL) {
+            send(fd, "\t", 2, 0);
+            send(fd, maps[i].username, strlen(maps[i].username), 0);
+            send(fd, "\n", 2, 0);
+        } 
+    }
 }
 
 // get sockaddr, IPv4 or IPv6:
@@ -101,8 +118,10 @@ int main(void)
     }
     int current_free_index = 0;
     const char * welcomemsg = "Please enter your login: ";
+    const char * selecttargetmsg = "Please enter name of user that you want to talk with: ";
     char * newcoming_username = NULL;
     MapFdUsername * tmp_user = NULL;
+    MapFdUsername * tmp_target_user = NULL;
 
     fd_set master;    // master file descriptor list
     fd_set read_fds;  // temp file descriptor list for select()
@@ -217,6 +236,7 @@ int main(void)
                     }
                 } else {
                     // handle data from a client
+                    bzero(buf, sizeof buf);
                     if ((nbytes = recv(i, buf, sizeof buf, 0)) <= 0) {
                         // got error or connection closed by client
                         if (nbytes == 0) {
@@ -240,18 +260,22 @@ int main(void)
                             newcoming_username = malloc(sizeof(char) * MAX_UNAME_LENGTH);
                             strncpy(newcoming_username, buf, MAX_UNAME_LENGTH-1);
                             newcoming_username[MAX_UNAME_LENGTH-1] = '\0';
+                            strReplace(newcoming_username, '\n', '\0');
                             mapFdWithUsername(tmp_user, i, newcoming_username);
 
+                            send(i, selecttargetmsg, strlen(selecttargetmsg), 0);
+                            mapSendUserList(map, i);
+
+                        } else if(tmp_user->target_fd == -1) {
+                            // setup a target user
+                            mapSetTarget(tmp_user, mapGetUserByName(map, buf)->fd);
                         } else {
                             // we got some data from a client
-                            for(j = 0; j <= fdmax; j++) {
-                                // send to everyone!
-                                if (FD_ISSET(j, &master)) {
-                                    // except the listener and ourselves
-                                    if (j != listener && j != i) {
-                                        if (send(j, buf, nbytes, 0) == -1) {
-                                            perror("send");
-                                        }
+                            if (FD_ISSET(tmp_user->target_fd, &master)) {
+                                // except the listener and ourselves
+                                if (j != listener && j != i) {
+                                    if (send(tmp_user->target_fd, buf, nbytes, 0) == -1) {
+                                        perror("send");
                                     }
                                 }
                             }
