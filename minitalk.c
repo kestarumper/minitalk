@@ -8,7 +8,61 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-#define PORT "9034"   // port we're listening on
+#define PORT "2137"   // port we're listening on
+#define MAX_USERS 1024
+#define MAX_UNAME_LENGTH 64
+
+typedef struct {
+    int fd;             // user file descriptor
+    int target_fd;      // to whom i'm talking
+    char * username;    // my user name
+} MapFdUsername;
+
+void mapFdWithUsername(MapFdUsername * map, int fd, char * user) {
+    map->fd = fd;
+    map->username = user;
+}
+
+void mapSetTarget(MapFdUsername * map, int target) {
+    map->target_fd = target;
+}
+
+void mapDestroy(MapFdUsername * map) {
+    map->fd = -1;
+    map->target_fd = -1;
+    if(map->username != NULL) {
+        free(map->username);
+    }
+}
+
+MapFdUsername * mapGetFirstFree(MapFdUsername maps[]) {
+    for(int i = 0; i < MAX_USERS; i++) {
+        if(maps[i].fd == -1) {
+            return &maps[i];
+        }
+    }
+    
+    return NULL; // none left
+}
+
+MapFdUsername * mapGetUser(MapFdUsername maps[], char * usr) {
+    for(int i = 0; i < MAX_USERS; i++) {
+        if(strcmp(maps[i].username, usr) == 0) {
+            return &maps[i];
+        }
+    }
+
+    return NULL; // user not found
+}
+
+void mapListUsers(MapFdUsername maps[]) {
+    printf("List:\tFD\tUSERNAME\n");
+    for(int i = 0; i < MAX_USERS; i++) {
+        if(maps[i].username != NULL) {
+            printf("\t%i\t%s\n", maps[i].fd, maps[i].username);
+        }
+    }
+}
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -25,6 +79,12 @@ int main(void)
     printf("Server listening on PORT: %s\n", PORT);
     fflush(stdout);
 
+    MapFdUsername * map = malloc(sizeof(MapFdUsername) * MAX_USERS);
+    for(int i = 0; i < 1024; i++) {
+        mapFdWithUsername(&map[i], -1, NULL);
+        mapSetTarget(&map[i], -1);
+    }
+
     fd_set master;    // master file descriptor list
     fd_set read_fds;  // temp file descriptor list for select()
     int fdmax;        // maximum file descriptor number
@@ -39,7 +99,7 @@ int main(void)
 
     char remoteIP[INET6_ADDRSTRLEN];
 
-    int yes=1;        // for setsockopt() SO_REUSEADDR, below
+    int yes = 1;        // for setsockopt() SO_REUSEADDR, below
     int i, j, rv;
 
     struct addrinfo hints, *ai, *p;
@@ -119,8 +179,10 @@ int main(void)
                         if (newfd > fdmax) {    // keep track of the max
                             fdmax = newfd;
                         }
-                        printf("selectserver: new connection from %s on "
-                            "socket %d\n",
+
+                        
+
+                        printf("selectserver: new connection from %s on socket %d\n",
                             inet_ntop(remoteaddr.ss_family,
                                 get_in_addr((struct sockaddr*)&remoteaddr),
                                 remoteIP, INET6_ADDRSTRLEN),
