@@ -33,21 +33,32 @@ void mapDestroy(MapFdUsername * map) {
     if(map->username != NULL) {
         free(map->username);
     }
+    map->username = NULL;
 }
 
-MapFdUsername * mapGetFirstFree(MapFdUsername maps[]) {
+int mapGetFirstFree(MapFdUsername maps[]) {
     for(int i = 0; i < MAX_USERS; i++) {
         if(maps[i].fd == -1) {
-            return &maps[i];
+            return i;
         }
     }
     
-    return NULL; // none left
+    return -1; // none left
 }
 
-MapFdUsername * mapGetUser(MapFdUsername maps[], char * usr) {
+MapFdUsername * mapGetUserByName(MapFdUsername maps[], char * usr) {
     for(int i = 0; i < MAX_USERS; i++) {
         if(strcmp(maps[i].username, usr) == 0) {
+            return &maps[i];
+        }
+    }
+
+    return NULL; // user not found
+}
+
+MapFdUsername * mapGetUserByFd(MapFdUsername maps[], int fd) {
+    for(int i = 0; i < MAX_USERS; i++) {
+        if(maps[i].fd == fd) {
             return &maps[i];
         }
     }
@@ -62,6 +73,10 @@ void mapListUsers(MapFdUsername maps[]) {
             printf("\t%i\t%s\n", maps[i].fd, maps[i].username);
         }
     }
+}
+
+int sendUserList(MapFdUsername maps[]) {
+
 }
 
 // get sockaddr, IPv4 or IPv6:
@@ -84,6 +99,10 @@ int main(void)
         mapFdWithUsername(&map[i], -1, NULL);
         mapSetTarget(&map[i], -1);
     }
+    int current_free_index = 0;
+    const char * welcomemsg = "Please enter your login: ";
+    char * newcoming_username = NULL;
+    MapFdUsername * tmp_user = NULL;
 
     fd_set master;    // master file descriptor list
     fd_set read_fds;  // temp file descriptor list for select()
@@ -156,6 +175,8 @@ int main(void)
 
     // main loop
     for(;;) {
+        mapListUsers(map);
+
         read_fds = master; // copy it
         if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1) {
             perror("select");
@@ -179,8 +200,14 @@ int main(void)
                         if (newfd > fdmax) {    // keep track of the max
                             fdmax = newfd;
                         }
+ 
+                        send(newfd, welcomemsg, strlen(welcomemsg), 0);
 
-                        
+                        current_free_index = mapGetFirstFree(map);
+                        if(current_free_index == -1) {
+                            fprintf(stderr, "No space left for next user");
+                        }
+                        mapFdWithUsername(&map[current_free_index], newfd, NULL);
 
                         printf("selectserver: new connection from %s on socket %d\n",
                             inet_ntop(remoteaddr.ss_family,
@@ -200,15 +227,31 @@ int main(void)
                         }
                         close(i); // bye!
                         FD_CLR(i, &master); // remove from master set
+                        mapDestroy(mapGetUserByFd(map, i)); // remove from UserFd list
                     } else {
-                        // we got some data from a client
-                        for(j = 0; j <= fdmax; j++) {
-                            // send to everyone!
-                            if (FD_ISSET(j, &master)) {
-                                // except the listener and ourselves
-                                if (j != listener && j != i) {
-                                    if (send(j, buf, nbytes, 0) == -1) {
-                                        perror("send");
+                        tmp_user = mapGetUserByFd(map, i); 
+                        if(tmp_user == NULL) {
+                            fprintf(stderr, "User[fd: %i] not found in database", i);
+                            exit(1);
+                        }
+
+                        if(tmp_user->username == NULL) {
+                            // user sends his login
+                            newcoming_username = malloc(sizeof(char) * MAX_UNAME_LENGTH);
+                            strncpy(newcoming_username, buf, MAX_UNAME_LENGTH-1);
+                            newcoming_username[MAX_UNAME_LENGTH-1] = '\0';
+                            mapFdWithUsername(tmp_user, i, newcoming_username);
+
+                        } else {
+                            // we got some data from a client
+                            for(j = 0; j <= fdmax; j++) {
+                                // send to everyone!
+                                if (FD_ISSET(j, &master)) {
+                                    // except the listener and ourselves
+                                    if (j != listener && j != i) {
+                                        if (send(j, buf, nbytes, 0) == -1) {
+                                            perror("send");
+                                        }
                                     }
                                 }
                             }
