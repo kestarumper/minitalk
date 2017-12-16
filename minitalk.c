@@ -48,7 +48,7 @@ int mapGetFirstFree(MapFdUsername maps[]) {
 
 MapFdUsername * mapGetUserByName(MapFdUsername maps[], char * usr) {
     for(int i = 0; i < MAX_USERS; i++) {
-        if(strcmp(maps[i].username, usr) == 0) {
+        if(maps[i].fd != -1 && strcmp(maps[i].username, usr) == 0) {
             return &maps[i];
         }
     }
@@ -96,6 +96,26 @@ void mapSendUserList(MapFdUsername maps[], int fd) {
     }
 }
 
+void sendToAll(MapFdUsername maps[], char * msg) {
+    for(int i = 0; i < MAX_USERS; i++) {
+        // ignore server in out
+        if(maps[i].fd != -1) {
+            send(maps[i].fd, msg, strlen(msg), 0);
+        }
+    }
+}
+
+void sendDisconnectedMsg(MapFdUsername maps[], int from) {
+    char * disconnectionmsg = "User you were talking to, disconnected from the server";
+    for(int i = 0; i < MAX_USERS; i++) {
+        if(maps[i].target_fd == from) {
+            maps[i].target_fd = -1;
+            send(maps[i].fd, disconnectionmsg, strlen(disconnectionmsg), 0);
+            mapSendUserList(maps, maps[i].fd);
+        }
+    }
+}
+
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
 {
@@ -119,6 +139,7 @@ int main(void)
     int current_free_index = 0;
     const char * welcomemsg = "Please enter your login: ";
     const char * selecttargetmsg = "Please enter name of user that you want to talk with: ";
+    char * message_buffer = malloc(256 * sizeof(char));
     char * newcoming_username = NULL;
     MapFdUsername * tmp_user = NULL;
     MapFdUsername * tmp_target_user = NULL;
@@ -194,8 +215,6 @@ int main(void)
 
     // main loop
     for(;;) {
-        mapListUsers(map);
-
         read_fds = master; // copy it
         if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1) {
             perror("select");
@@ -247,7 +266,15 @@ int main(void)
                         }
                         close(i); // bye!
                         FD_CLR(i, &master); // remove from master set
-                        mapDestroy(mapGetUserByFd(map, i)); // remove from UserFd list
+
+                        tmp_user = mapGetUserByFd(map, i);
+                        bzero(message_buffer, 256);
+                        strcat(message_buffer, "- ");
+                        strcat(message_buffer, tmp_user->username);
+                        strcat(message_buffer, " has disconnected\n");
+                        sendToAll(map, message_buffer);
+                        mapDestroy(tmp_user); // remove from UserFd list
+                        sendDisconnectedMsg(map, i);
                     } else {
                         tmp_user = mapGetUserByFd(map, i); 
                         if(tmp_user == NULL) {
@@ -260,7 +287,13 @@ int main(void)
                             newcoming_username = malloc(sizeof(char) * MAX_UNAME_LENGTH);
                             strncpy(newcoming_username, buf, MAX_UNAME_LENGTH-1);
                             newcoming_username[MAX_UNAME_LENGTH-1] = '\0';
+                            strReplace(newcoming_username, '\r', '\0');
                             strReplace(newcoming_username, '\n', '\0');
+                            bzero(message_buffer, 256);
+                            strcat(message_buffer, "+ ");
+                            strcat(message_buffer, newcoming_username);
+                            strcat(message_buffer, " has connected\n");
+                            sendToAll(map, message_buffer);
                             mapFdWithUsername(tmp_user, i, newcoming_username);
 
                             send(i, selecttargetmsg, strlen(selecttargetmsg), 0);
@@ -268,13 +301,20 @@ int main(void)
 
                         } else if(tmp_user->target_fd == -1) {
                             // setup a target user
+                            strReplace(buf, '\r', '\0');
+                            strReplace(buf, '\n', '\0');
                             mapSetTarget(tmp_user, mapGetUserByName(map, buf)->fd);
                         } else {
                             // we got some data from a client
                             if (FD_ISSET(tmp_user->target_fd, &master)) {
                                 // except the listener and ourselves
                                 if (j != listener && j != i) {
-                                    if (send(tmp_user->target_fd, buf, nbytes, 0) == -1) {
+                                    bzero(message_buffer, 256);
+                                    strcat(message_buffer, "[");
+                                    strcat(message_buffer, tmp_user->username);
+                                    strcat(message_buffer, "] ");
+                                    strcat(message_buffer, buf);
+                                    if (send(tmp_user->target_fd, message_buffer, strlen(message_buffer), 0) == -1) {
                                         perror("send");
                                     }
                                 }
